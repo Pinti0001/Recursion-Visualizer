@@ -180,6 +180,7 @@ class Interpreter {
       returnValue: null,
       parentId:    parentId || null,
       children:    [],
+      prints:      [],          // ← per-call printf output history
       isBaseCase:  false,
     };
     this.liveNodes[callId] = node;
@@ -500,7 +501,12 @@ class Interpreter {
     }
 
     this.liveOutput += result;
+    // Track this print on the specific call-node so the tree can show it
+    if (this.liveNodes[callId]) {
+      this.liveNodes[callId].prints.push(result);
+    }
     this._emit({ type: 'PRINT', callId, output: result, line: expr.line });
+
     return 0;
   }
 

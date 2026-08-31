@@ -26,34 +26,59 @@ class TreeRenderer {
     this._d3root  = null;
   }
 
-  // Build nested structure from flat nodes map (only nodes present in snapshot)
+  // Build nested structure from flat nodes map.
+  // In addition to recursive call children, inject compact event nodes
+  // for PRINT events (and RETURN for base cases) that have fired so far.
   _buildHierarchy(nodes, rootId) {
     const node = nodes[rootId];
     if (!node) return null;
-    const kids = (node.children || [])
-      .filter(cid => nodes[cid])                        // only nodes that EXIST in this snapshot
+
+    // ── Recursive call children (the real D3 subtrees)
+    const callKids = (node.children || [])
+      .filter(cid => nodes[cid])
       .map(cid => this._buildHierarchy(nodes, cid))
       .filter(Boolean);
-    return { ...node, _kids: kids };
+
+    // ── Print event leaf nodes (one per printf that has executed)
+    const printKids = (node.prints || []).map((text, i) => ({
+      callId:        `${rootId}-print-${i}`,   // unique stable ID
+      _isPrintNode:  true,
+      _printText:    text,
+      _parentCallId: rootId,
+      _kids:         [],
+    }));
+
+    // ── Return event leaf node (only for base-case RETURNED nodes)
+    const returnKids = (node.state === 'RETURNED' && node.isBaseCase)
+      ? [{
+          callId:          `${rootId}-return`,
+          _isReturnNode:   true,
+          _returnValue:    node.returnValue,
+          _parentCallId:   rootId,
+          _kids:           [],
+        }]
+      : [];
+
+    // Order: prints first (they happen before child calls), then call children, then return
+    return { ...node, _kids: [...printKids, ...callKids, ...returnKids] };
   }
 
   render(snapshot, animateReturnFromId = null) {
-    // ── Step 1: cancel ALL ongoing D3 transitions to prevent ghost rendering
+    // ── Cancel ALL ongoing D3 transitions to prevent ghost rendering
     this.g.selectAll('*').interrupt();
-    // Remove any floating return-value badges (they may be mid-animation)
     this.g.selectAll('.return-badge').remove();
 
     const { nodes, rootId } = snapshot;
     const treeEmpty = document.getElementById('tree-empty');
 
     if (!rootId || !nodes[rootId]) {
-      this.g.selectAll('.t-link, .t-node').remove();
+      this.g.selectAll('.t-link, .t-node, .ev-node').remove();
       if (treeEmpty) treeEmpty.style.display = 'flex';
       return;
     }
     if (treeEmpty) treeEmpty.style.display = 'none';
 
-    // ── Step 2: build D3 hierarchy from snapshot's nodes ONLY
+    // ── Build D3 hierarchy (includes event leaf nodes)
     const hierarchyData = this._buildHierarchy(nodes, rootId);
     if (!hierarchyData) return;
 
@@ -66,86 +91,59 @@ class TreeRenderer {
     const allLinks = root.links();
     const allDesc  = root.descendants();
 
+    // Split descendants: function-call nodes vs event leaf nodes
+    const fnDesc    = allDesc.filter(d => !d.data._isPrintNode && !d.data._isReturnNode);
+    const evDesc    = allDesc.filter(d =>  d.data._isPrintNode ||  d.data._isReturnNode);
+
     // ── Links ──────────────────────────────────────────────────────
-    // Key includes BOTH source and target IDs to be unambiguous
     const linkSel = this.g.selectAll('.t-link')
       .data(allLinks, d => `${d.source.data.callId}→${d.target.data.callId}`);
 
-    // EXIT: remove links immediately — no fading transition (prevents ghost lines)
     linkSel.exit().interrupt().remove();
 
-    // ENTER: new links appear with a short fade
+    // Enter: give event links a different style (dashed)
     const linkEnter = linkSel.enter().append('path')
-      .attr('class', 't-link')
-      .attr('d', d => this._linkPath(d))
+      .attr('class', d => {
+        const isEvLink = d.target.data._isPrintNode || d.target.data._isReturnNode;
+        return isEvLink ? 't-link ev-link' : 't-link';
+      })
+      .attr('d', d => this._linkPath(d, d.target.data._isPrintNode || d.target.data._isReturnNode))
       .style('opacity', 0);
 
     linkEnter.transition().duration(180).style('opacity', 1);
 
-    // UPDATE: reposition existing links immediately
     linkSel.interrupt()
-      .attr('d', d => this._linkPath(d))
+      .attr('d', d => this._linkPath(d, d.target.data._isPrintNode || d.target.data._isReturnNode))
       .style('opacity', 1);
 
-    // ── Nodes ──────────────────────────────────────────────────────
-    const nodeSel = this.g.selectAll('.t-node')
-      .data(allDesc, d => d.data.callId);
+    // ── Function-call nodes ────────────────────────────────────────
+    const fnSel = this.g.selectAll('.t-node')
+      .data(fnDesc, d => d.data.callId);
 
-    // EXIT: remove nodes immediately
-    nodeSel.exit().interrupt().remove();
+    fnSel.exit().interrupt().remove();
 
-    // ENTER: build node DOM structure
-    const nodeEnter = nodeSel.enter().append('g')
+    const fnEnter = fnSel.enter().append('g')
       .attr('class', d => `t-node ${TreeRenderer.nodeStateClass(d.data)}`)
       .attr('transform', d => `translate(${d.x},${d.y})`)
       .style('opacity', 0);
 
-    // Outer glow / pulse ring (shown only for active nodes via CSS)
-    nodeEnter.append('rect')
-      .attr('class', 'node-glow')
-      .attr('x', -62).attr('y', -38)
-      .attr('width', 124).attr('height', 76)
-      .attr('rx', 14);
+    // Glow ring
+    fnEnter.append('rect').attr('class', 'node-glow')
+      .attr('x', -62).attr('y', -38).attr('width', 124).attr('height', 76).attr('rx', 14);
+    // Body
+    fnEnter.append('rect').attr('class', 'node-body')
+      .attr('x', -56).attr('y', -34).attr('width', 112).attr('height', 68).attr('rx', 10);
+    fnEnter.append('text').attr('class', 'node-fn').attr('text-anchor', 'middle').attr('y', -10);
+    fnEnter.append('text').attr('class', 'node-args').attr('text-anchor', 'middle').attr('y', 7);
+    fnEnter.append('text').attr('class', 'node-status').attr('text-anchor', 'middle').attr('y', 24);
 
-    // Main body rect
-    nodeEnter.append('rect')
-      .attr('class', 'node-body')
-      .attr('x', -56).attr('y', -34)
-      .attr('width', 112).attr('height', 68)
-      .attr('rx', 10);
+    fnEnter.transition().duration(180).style('opacity', 1);
 
-    // Function name line  e.g. "fib(4)"
-    nodeEnter.append('text')
-      .attr('class', 'node-fn')
-      .attr('text-anchor', 'middle')
-      .attr('y', -10);
+    const allFnNodes = fnEnter.merge(fnSel);
+    allFnNodes.interrupt().style('opacity', 1);
+    allFnNodes.attr('transform', d => `translate(${d.x},${d.y})`);
 
-    // Args / param bindings  e.g. "n = 4"
-    nodeEnter.append('text')
-      .attr('class', 'node-args')
-      .attr('text-anchor', 'middle')
-      .attr('y', 7);
-
-    // State badge  e.g. "→ 3"  or  "WAITING"
-    nodeEnter.append('text')
-      .attr('class', 'node-status')
-      .attr('text-anchor', 'middle')
-      .attr('y', 24);
-
-    // Fade-in new nodes
-    nodeEnter.transition().duration(180).style('opacity', 1);
-
-    // MERGE: update ALL nodes (new + existing)
-    const allNodes = nodeEnter.merge(nodeSel);
-
-    // Force opacity 1 (cancel any lingering fade-out from previous render)
-    allNodes.interrupt().style('opacity', 1);
-
-    // Reposition immediately (no transition — prevents stuttery layout shifts)
-    allNodes.attr('transform', d => `translate(${d.x},${d.y})`);
-
-    // Update class and label content
-    allNodes.each(function(d) {
+    allFnNodes.each(function(d) {
       const nd  = d.data;
       const sel = d3.select(this);
 
@@ -163,12 +161,57 @@ class TreeRenderer {
         case 'ACTIVE':   status = '● EXECUTING'; break;
         case 'WAITING':  status = '◌ WAITING…';  break;
         case 'RETURNED':
-          status = nd.isBaseCase
-            ? `★ BASE  ${nd.returnValue}`
-            : `↩ ${nd.returnValue}`;
+          status = nd.isBaseCase ? `★ BASE  ${nd.returnValue}` : `↩ ${nd.returnValue}`;
           break;
       }
       sel.select('.node-status').text(status);
+    });
+
+    // ── Event nodes (PRINT / RETURN) ───────────────────────────────
+    const evSel = this.g.selectAll('.ev-node')
+      .data(evDesc, d => d.data.callId);
+
+    evSel.exit().interrupt().remove();
+
+    const evEnter = evSel.enter().append('g')
+      .attr('class', d => d.data._isPrintNode ? 'ev-node ev-print' : 'ev-node ev-return')
+      .attr('transform', d => `translate(${d.x},${d.y})`)
+      .style('opacity', 0);
+
+    // Event node body (shorter rect)
+    evEnter.append('rect').attr('class', 'ev-body')
+      .attr('x', -50).attr('y', -22).attr('width', 100).attr('height', 44).attr('rx', 8);
+
+    // Icon line (top)
+    evEnter.append('text').attr('class', 'ev-icon').attr('text-anchor', 'middle').attr('y', -5);
+
+    // Value line (bottom)
+    evEnter.append('text').attr('class', 'ev-value').attr('text-anchor', 'middle').attr('y', 14);
+
+    evEnter.transition().duration(180).style('opacity', 1);
+
+    const allEvNodes = evEnter.merge(evSel);
+    allEvNodes.interrupt().style('opacity', 1);
+    allEvNodes.attr('transform', d => `translate(${d.x},${d.y})`);
+
+    allEvNodes.each(function(d) {
+      const nd  = d.data;
+      const sel = d3.select(this);
+
+      if (nd._isPrintNode) {
+        sel.attr('class', 'ev-node ev-print');
+        sel.select('.ev-icon').text('🖨 PRINT');
+        // Sanitize for display: replace \n with ↵, show in quotes, trim if long
+        const disp = nd._printText
+          .replace(/\n/g, '↵').replace(/\r/g, '').replace(/\t/g, '⇥');
+        const label = disp.length > 14 ? `"${disp.slice(0, 13)}…"` : `"${disp}"`;
+        sel.select('.ev-value').text(label);
+      } else {
+        // Return event node
+        sel.attr('class', 'ev-node ev-return');
+        sel.select('.ev-icon').text('↩ RETURN');
+        sel.select('.ev-value').text(String(nd._returnValue));
+      }
     });
 
     // ── Return-value floating badge ─────────────────────────────────
@@ -177,9 +220,12 @@ class TreeRenderer {
     }
   }
 
-  _linkPath(d) {
-    const sx = d.source.x, sy = d.source.y + 34;
-    const tx = d.target.x, ty = d.target.y - 34;
+  // isEventLink = true when the target is a PRINT or RETURN event node (shorter, 44px tall)
+  _linkPath(d, isEventLink = false) {
+    const srcHalf = 34;   // function nodes are 68px tall
+    const tgtHalf = isEventLink ? 22 : 34; // event nodes are 44px tall
+    const sx = d.source.x, sy = d.source.y + srcHalf;
+    const tx = d.target.x, ty = d.target.y - tgtHalf;
     const my = (sy + ty) / 2;
     return `M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`;
   }

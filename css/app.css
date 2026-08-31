@@ -363,6 +363,55 @@ html, body {
 /* Base-case returned nodes get a star color */
 .t-node.node-returned .node-status { fill: var(--color-base, #f0883e); }
 
+/* ══ EVENT NODES (PRINT / RETURN) ═════════════════════════════════════ */
+
+/* ev-link: dashed line connecting function node → event node */
+.ev-link {
+  stroke: rgba(255,255,255,0.15);
+  stroke-dasharray: 4 3;
+  stroke-width: 1.2;
+}
+
+/* Base event node */
+.ev-node .ev-body {
+  fill: #1a1a2e;
+  stroke: rgba(255,255,255,0.15);
+  stroke-width: 1;
+}
+
+.ev-node .ev-icon {
+  font-family: var(--font-sans);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.ev-node .ev-value {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* PRINT event node — green tinted */
+.ev-print .ev-body {
+  fill: #0d201a;
+  stroke: rgba(56,211,100,0.4);
+  stroke-width: 1.5;
+}
+
+.ev-print .ev-icon  { fill: #56d364; }
+.ev-print .ev-value { fill: #3fb950; }
+
+/* RETURN event node — orange tinted */
+.ev-return .ev-body {
+  fill: #1f1600;
+  stroke: rgba(240,136,62,0.45);
+  stroke-width: 1.5;
+}
+
+.ev-return .ev-icon  { fill: #f0883e; }
+.ev-return .ev-value { fill: #d29922; font-size: 12px; font-weight: 700; }
+
 /* Tree toolbar */
 #tree-toolbar {
   position: absolute;
