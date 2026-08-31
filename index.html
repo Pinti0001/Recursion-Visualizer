@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recursion Visualizer — Interactive C Execution Explorer</title>
+  <meta name="description" content="Step-by-step visualization of recursive C programs. Watch the call tree grow, track the call stack, and understand every execution step.">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+  <!-- CodeMirror 5 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.17/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.17/addon/hint/show-hint.min.css">
+
+  <!-- App CSS -->
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- HEADER                                                       -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <header id="header">
+    <div class="logo">
+      <span class="logo-icon" aria-hidden="true">🌀</span>
+      <div>
+        <div class="logo-text">Recursion Visualizer</div>
+        <div class="logo-sub">Interactive C Execution Explorer</div>
+      </div>
+    </div>
+
+    <div id="header-controls">
+      <span id="example-desc" title="Example description">Select an example or write your own recursive C program</span>
+
+      <select id="example-select" class="select-styled" aria-label="Load example program">
+        <option value="">📂 Load Example…</option>
+        <option value="fibonacci">🔢 Fibonacci</option>
+        <option value="factorial">❗ Factorial</option>
+        <option value="power">⚡ Power</option>
+        <option value="gcd">🔗 GCD (Euclidean)</option>
+        <option value="sumN">➕ Sum 1 to N</option>
+        <option value="countdown">⏱ Countdown</option>
+        <option value="hanoi">🗼 Tower of Hanoi</option>
+        <option value="binarySearch">🔍 Binary Search</option>
+      </select>
+
+      <button id="btn-visualize" class="btn-primary">▶ Visualize</button>
+    </div>
+  </header>
+
+  <!-- Error panel (shown when parsing/execution fails) -->
+  <div id="error-panel" role="alert" aria-live="assertive"></div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- MAIN — 3-panel layout                                        -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <main id="main">
+
+    <!-- ── LEFT PANEL: Code Editor ─────────────────────────────── -->
+    <section id="panel-code" class="panel" aria-label="Code Editor">
+      <div class="panel-title">
+        <span class="panel-icon">📝</span>
+        C Source Code
+      </div>
+      <div class="code-editor-wrap">
+        <textarea id="code-textarea" aria-label="C source code editor"></textarea>
+      </div>
+    </section>
+
+    <!-- ── CENTER PANEL: Recursion Tree ────────────────────────── -->
+    <section id="panel-tree" class="panel" aria-label="Recursion Call Tree">
+      <div class="panel-title">
+        <span class="panel-icon">🌳</span>
+        Recursion Tree
+        <div id="tree-legend" aria-label="Tree node legend">
+          <span class="legend-item"><span class="legend-dot active"></span>Active</span>
+          <span class="legend-item"><span class="legend-dot waiting"></span>Waiting</span>
+          <span class="legend-item"><span class="legend-dot returned"></span>Returned</span>
+          <span class="legend-item"><span class="legend-dot base"></span>Base Case</span>
+        </div>
+      </div>
+
+      <div id="tree-container">
+        <!-- Empty state -->
+        <div id="tree-empty" role="status">
+          <div class="tree-empty-icon" aria-hidden="true">🌲</div>
+          <div class="tree-empty-text">
+            The recursion tree will appear here.<br>
+            Press <strong>▶ Visualize</strong> to start.
+          </div>
+        </div>
+
+        <!-- D3 SVG Tree -->
+        <svg id="tree-svg" aria-label="Recursion tree visualization" role="img"></svg>
+
+        <!-- Tree controls -->
+        <div id="tree-toolbar">
+          <button id="btn-reset-camera" class="tree-tool-btn" title="Reset tree view (fit to screen)">⊙ Fit</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── RIGHT PANEL: Info + Stack + Output ──────────────────── -->
+    <aside id="panel-right" aria-label="Execution details">
+
+      <!-- Execution Info -->
+      <section id="exec-info-panel" class="panel" aria-label="Current execution info">
+        <div class="panel-title">
+          <span class="panel-icon">⚡</span>
+          Current Execution
+        </div>
+        <div id="exec-info">
+          <div class="info-placeholder">Press <strong>▶ Visualize</strong> to begin</div>
+        </div>
+      </section>
+
+      <!-- Call Stack -->
+      <section id="stack-panel" class="panel" aria-label="Call stack">
+        <div class="panel-title">
+          <span class="panel-icon">📚</span>
+          Call Stack
+          <span style="margin-left:auto;font-size:9px;color:var(--text-muted);font-weight:400;letter-spacing:0">(newest on top)</span>
+        </div>
+        <div id="stack-frames" role="list" aria-label="Stack frames">
+          <div class="stack-empty">No active calls</div>
+        </div>
+      </section>
+
+      <!-- Output Console -->
+      <section id="output-panel" class="panel" aria-label="Program output">
+        <div class="panel-title">
+          <span class="panel-icon">🖨️</span>
+          Program Output
+        </div>
+        <pre id="output-content" aria-live="polite" aria-label="Program output console"></pre>
+      </section>
+
+    </aside>
+  </main>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- BOTTOM BAR — Controls + Explanation                         -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <footer id="bottom-bar">
+    <!-- Progress bar -->
+    <div id="progress-track" role="progressbar" aria-label="Execution progress">
+      <div id="progress-bar"></div>
+    </div>
+
+    <!-- Playback controls -->
+    <div id="controls">
+      <button id="btn-restart" class="ctrl-btn" title="Go to start (R)" aria-label="Restart">⏮</button>
+      <button id="btn-prev"    class="ctrl-btn" title="Previous step (←)" aria-label="Previous step" disabled>◀ Prev</button>
+      <button id="btn-play"    class="ctrl-btn primary" title="Play / Pause (Space)" aria-label="Play or Pause">▶ Play</button>
+      <button id="btn-next"    class="ctrl-btn" title="Next step (→)" aria-label="Next step" disabled>Next ▶</button>
+      <button id="btn-end"     class="ctrl-btn" title="Go to end" aria-label="Go to end" disabled>⏭</button>
+
+      <div class="ctrl-speed">
+        <span class="ctrl-label">Speed:</span>
+        <select id="speed-select" class="select-styled" aria-label="Playback speed" style="padding:4px 8px;font-size:12px;">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+          <option value="8">8×</option>
+        </select>
+      </div>
+
+      <span id="step-counter" aria-live="polite">Ready</span>
+      <span id="shortcut-hint" aria-hidden="true">← → Space keys</span>
+    </div>
+
+    <!-- Explanation -->
+    <div id="explanation-bar">
+      <div id="explanation-panel">
+        <div class="expl-placeholder">Step through the execution to see beginner-friendly explanations here.</div>
+      </div>
+    </div>
+  </footer>
+
+</div><!-- #app -->
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- SCRIPTS                                                       -->
+<!-- ════════════════════════════════════════════════════════════ -->
+
+<!-- CodeMirror 5 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.17/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.17/mode/clike/clike.min.js"></script>
+
+<!-- D3 v7 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+
+<!-- App modules (order matters: dependencies first) -->
+<script src="js/examples.js"></script>
+<script src="js/lexer.js"></script>
+<script src="js/parser.js"></script>
+<script src="js/interpreter.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>
