@@ -13,17 +13,125 @@ class TreeRenderer {
     this.svg   = d3.select(svgEl);
     this.g     = this.svg.append('g').attr('class', 'tree-root');
 
+    // ── D3 zoom behaviour ─────────────────────────────────────────
+    // We DISABLE the built-in wheel→zoom filter; we handle wheel ourselves
+    // so that we can route: plain-wheel → pan Y, Shift → pan X, Ctrl/Cmd → zoom
     this.zoom = d3.zoom()
-      .scaleExtent([0.08, 4])
+      .scaleExtent([0.15, 4])
+      .filter(event => {
+        // Allow: touch, mouse drag, programmatic calls
+        // Deny:  wheel events (we handle those manually below)
+        if (event.type === 'wheel') return false;
+        // Deny right-click drag (button 2)
+        if (event.type === 'mousedown' && event.button === 2) return false;
+        return true;
+      })
       .on('zoom', (e) => { this.g.attr('transform', e.transform); });
+
     this.svg.call(this.zoom);
 
-    this._userPanned = false;
-    this.svg.on('mousedown.zoom', () => { this._userPanned = true; });
+    // ── Custom wheel handler ──────────────────────────────────────
+    // Uses svgEl (native DOM) so we can call preventDefault() reliably
+    svgEl.addEventListener('wheel', (e) => {
+      e.preventDefault();
+
+      const isZoom = e.ctrlKey || e.metaKey;
+
+      if (isZoom) {
+        // ── Zoom around mouse cursor ──────────────────────────────
+        const scaleFactor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+        const [mx, my] = d3.pointer(e, svgEl); // cursor in SVG coords
+        const t = d3.zoomTransform(svgEl);
+
+        // Compute new transform that keeps point under cursor fixed
+        const newScale = Math.max(0.15, Math.min(4, t.k * scaleFactor));
+        const newX = mx - (mx - t.x) * (newScale / t.k);
+        const newY = my - (my - t.y) * (newScale / t.k);
+
+        this.svg.call(
+          this.zoom.transform,
+          d3.zoomIdentity.translate(newX, newY).scale(newScale)
+        );
+      } else if (e.shiftKey) {
+        // ── Shift + wheel → pan horizontal ───────────────────────
+        const dx = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+        this.svg.call(this.zoom.translateBy, -dx * 0.6, 0);
+      } else {
+        // ── Plain wheel → pan vertical ────────────────────────────
+        // Also support native horizontal scroll (trackpad two-finger)
+        const dy = e.deltaY;
+        const dx = e.deltaX;
+        this.svg.call(this.zoom.translateBy, -dx * 0.6, -dy * 0.6);
+      }
+
+      this._userPanned = true;
+    }, { passive: false });
+
+    // ── Track drag vs click ───────────────────────────────────────
+    // Only set _userPanned after the pointer has moved > 5px, so that
+    // clicking a node (no movement) does NOT lock the auto-center.
+    this._userPanned    = false;
+    this._dragStart     = null;
+    this._dragThreshold = 5; // px
+
+    this.svg.on('mousedown.trackdrag', (e) => {
+      this._dragStart = [e.clientX, e.clientY];
+    });
+    this.svg.on('mousemove.trackdrag', (e) => {
+      if (!this._dragStart) return;
+      const dx = e.clientX - this._dragStart[0];
+      const dy = e.clientY - this._dragStart[1];
+      if (Math.hypot(dx, dy) > this._dragThreshold) {
+        this._userPanned = true;
+        this._dragStart  = null; // don't keep re-firing
+      }
+    });
+    this.svg.on('mouseup.trackdrag',    () => { this._dragStart = null; });
+    this.svg.on('mouseleave.trackdrag', () => { this._dragStart = null; });
+
+    // ── Double-click → center the clicked node ────────────────────
+    // Attach once on the container group; use event.target traversal
+    this.g.on('dblclick.center', (event) => {
+      event.stopPropagation(); // don't bubble to SVG (which would zoom)
+      const nodeG = event.target.closest('.t-node, .ev-node');
+      if (!nodeG || !this._d3root) return;
+
+      // Find the D3 datum for this element
+      const all = this._d3root.descendants();
+      // t-node / ev-node elements carry data-call-id or we match by position
+      // Read the transform to get world coords
+      const transform = nodeG.getAttribute('transform') || '';
+      const m = transform.match(/translate\(([-\d.]+),([-\d.]+)\)/);
+      if (!m) return;
+      const wx = parseFloat(m[1]);
+      const wy = parseFloat(m[2]);
+
+      this._smoothCenterPoint(wx, wy);
+    });
+
+    // Prevent D3 zoom from firing its own dblclick zoom
+    this.svg.on('dblclick.zoom', null);
 
     // d3.tree nodeSize: [width-between-siblings, depth-between-levels]
     this.layout   = d3.tree().nodeSize([130, 100]);
     this._d3root  = null;
+  }
+
+  // ── Programmatic zoom in / out ────────────────────────────────
+  zoomIn()  { this.svg.call(this.zoom.scaleBy, 1.25); }
+  zoomOut() { this.svg.call(this.zoom.scaleBy, 1 / 1.25); }
+
+  // ── Smooth pan to world point (wx, wy) ───────────────────────
+  _smoothCenterPoint(wx, wy) {
+    const W = this.svgEl.clientWidth  || 600;
+    const H = this.svgEl.clientHeight || 400;
+    const t = d3.zoomTransform(this.svgEl);
+    // Screen position of (wx, wy) after applying current transform
+    const targetX = W / 2 - t.k * wx;
+    const targetY = H / 2 - t.k * wy;
+    this.svg.transition().duration(350).ease(d3.easeCubicInOut)
+      .call(this.zoom.transform, d3.zoomIdentity.translate(targetX, targetY).scale(t.k));
+    this._userPanned = true;
   }
 
   // Build nested structure from flat nodes map.
@@ -292,10 +400,47 @@ class TreeRenderer {
     return `node-${(nd.state || 'RETURNED').toLowerCase()}`;
   }
 
-  resetCamera() {
-    this._userPanned = false;
-    if (this._d3root) this._autoCenter(this._d3root);
+  // ── Fit entire tree into viewport ─────────────────────────────
+  // Measures all D3 node positions (function + event nodes) and computes
+  // the minimal zoom+pan that shows everything with padding.
+  fitToTree() {
+    if (!this._d3root) return;
+
+    const desc = this._d3root.descendants();
+    if (!desc.length) return;
+
+    // Account for event nodes (shorter ±22) and function nodes (±34)
+    const pad = 50; // extra padding in world-px around the tree
+    const xs = desc.map(d => d.x);
+    const ys = desc.map(d => d.y);
+    const minX = Math.min(...xs) - 70;   // node half-width
+    const maxX = Math.max(...xs) + 70;
+    const minY = Math.min(...ys) - 40;   // node half-height
+    const maxY = Math.max(...ys) + 40;
+
+    const treeW = (maxX - minX) + pad * 2;
+    const treeH = (maxY - minY) + pad * 2;
+
+    const W = this.svgEl.clientWidth  || 600;
+    const H = this.svgEl.clientHeight || 400;
+
+    const scale = Math.min(W / treeW, H / treeH, 2.5);
+    const midX  = (minX + maxX) / 2;
+    const midY  = (minY + maxY) / 2;
+    const tx    = W / 2 - scale * midX;
+    const ty    = H / 2 - scale * midY;
+
+    this.svg.transition().duration(400).ease(d3.easeCubicInOut)
+      .call(
+        this.zoom.transform,
+        d3.zoomIdentity.translate(tx, ty).scale(scale)
+      );
+
+    this._userPanned = false; // allow auto-center on next step
   }
+
+  // Alias used by existing btn-reset-camera wiring
+  resetCamera() { this.fitToTree(); }
 
   clearTree() {
     this.g.selectAll('*').interrupt();
@@ -894,7 +1039,11 @@ class App {
     $('btn-play').addEventListener('click',      () => this._togglePlay());
     $('btn-next').addEventListener('click',      () => this.playback.stepForward());
     $('btn-end').addEventListener('click',       () => this.playback.goToEnd());
-    $('btn-reset-camera').addEventListener('click', () => this.treeRenderer.resetCamera());
+
+    // Tree viewport controls
+    $('btn-reset-camera').addEventListener('click', () => this.treeRenderer.fitToTree());
+    $('btn-zoom-in').addEventListener('click',      () => this.treeRenderer.zoomIn());
+    $('btn-zoom-out').addEventListener('click',     () => this.treeRenderer.zoomOut());
 
     $('speed-select').addEventListener('change', e => {
       this.playback.setSpeed(parseFloat(e.target.value));
@@ -905,7 +1054,12 @@ class App {
       if (e.key === 'ArrowRight' || e.key === 'n') { e.preventDefault(); this.playback.stepForward(); }
       if (e.key === 'ArrowLeft'  || e.key === 'p') { e.preventDefault(); this.playback.stepBackward(); }
       if (e.key === ' ')                            { e.preventDefault(); this._togglePlay(); }
-      if (e.key === 'r')                            { e.preventDefault(); this.playback.restart(); }
+      if (e.key === 'r' || e.key === 'R')           { e.preventDefault(); this.playback.restart(); }
+      // f / F  →  fit tree to viewport
+      if (e.key === 'f' || e.key === 'F')           { e.preventDefault(); this.treeRenderer.fitToTree(); }
+      // +/= → zoom in,  -  → zoom out
+      if (e.key === '+' || e.key === '=')           { e.preventDefault(); this.treeRenderer.zoomIn(); }
+      if (e.key === '-' || e.key === '_')           { e.preventDefault(); this.treeRenderer.zoomOut(); }
     });
   }
 

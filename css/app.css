@@ -418,23 +418,56 @@ html, body {
   bottom: 10px;
   right: 10px;
   display: flex;
-  gap: 6px;
+  gap: 4px;
+  align-items: center;
+  background: rgba(13,17,23,0.75);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 6px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .tree-tool-btn {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
   color: var(--text-secondary);
-  padding: 5px 10px;
+  padding: 4px 8px;
   font-size: 11px;
   cursor: pointer;
-  transition: border-color var(--transition), color var(--transition);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
+  line-height: 1.4;
 }
 
 .tree-tool-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
+  background: rgba(88,166,255,0.08);
+}
+
+.tree-tool-btn:active {
+  background: rgba(88,166,255,0.16);
+}
+
+/* Zoom ＋ ／ － buttons — fixed width so they don't shift layout */
+#btn-zoom-in,
+#btn-zoom-out {
+  font-size: 15px;
+  font-weight: 300;
+  width: 28px;
+  padding: 2px 0;
+  text-align: center;
+}
+
+/* Thin divider before the Fit button */
+#btn-reset-camera {
+  margin-left: 4px;
+  border-left: 1px solid var(--border);
+  border-radius: 0 5px 5px 0;
+  padding-left: 10px;
 }
 
 /* Tree legend */
